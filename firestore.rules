@@ -1,0 +1,98 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper authentication & role functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'admin' ||
+        getUserData().role == 'admin'
+      );
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'teacher' ||
+        getUserData().role == 'teacher'
+      );
+    }
+
+    // 1. User Profiles:
+    // Students and teachers can read their own profile; admins can inspect all profiles.
+    // Writes are strictly mediated through server-side Admin SDK auth endpoints.
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if false;
+    }
+
+    // 2. Teacher Invite Codes:
+    // Only administrators can list and read invite codes.
+    // Validated and redeemed exclusively by server-side Admin SDK routes.
+    match /inviteCodes/{code} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // 3. Classes:
+    // Authenticated users can view classes.
+    // Creation and roster updates are managed server-side.
+    match /classes/{classId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // 4. Enrollments:
+    // Enrolled students, course teachers, and admins can read enrollment details.
+    // Self-enrollment is executed server-side to guarantee unique class join validation.
+    match /enrollments/{enrollmentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.teacherId == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if false;
+    }
+
+    // 5. Attendance Sessions & Verification Records:
+    // Sessions can be read by authenticated users for live updates and history.
+    // Token rotation, geofencing, device fingerprint deduplication, and check-ins
+    // are executed strictly through server API endpoints to prevent anti-proxy bypasses.
+    match /sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+
+      match /records/{studentId} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+    }
+
+    // 6. Proxy Alerts Audit Log:
+    // Course instructors and institution administrators can inspect proxy flags.
+    // Directly generated and written exclusively by server-side verification pipelines.
+    match /proxyAlerts/{alertId} {
+      allow read: if isAuthenticated() && (
+        resource.data.teacherId == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if false;
+    }
+
+    // Default deny for all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
